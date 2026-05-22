@@ -6,15 +6,34 @@
     - Variant validation
     - Nil UUID detection
     - Detailed error reporting
+    
+    Usage:
+    local UUID = require("uuidvalidator")
+    
+    local valid, info = UUID.validate("550e8400-e29b-41d4-a716-446655440000")
+    if valid then
+        print("Valid UUID v" .. info.version)
+    end
+    
+    -- With options
+    local valid = UUID.validate(uuid, {version = 4, disallowNil = true})
 ]]
 
 local UUID = {}
 
 UUID.NULL = "00000000-0000-0000-0000-000000000000"
 
--- Hex lookup for speed
+-- Pre-computed hex character lookup table (much faster than regex matching)
+local hexChars = {
+    ['0']=true, ['1']=true, ['2']=true, ['3']=true, ['4']=true,
+    ['5']=true, ['6']=true, ['7']=true, ['8']=true, ['9']=true,
+    ['a']=true, ['b']=true, ['c']=true, ['d']=true, ['e']=true, ['f']=true,
+    ['A']=true, ['B']=true, ['C']=true, ['D']=true, ['E']=true, ['F']=true,
+}
+
+-- Hex validation with O(1) lookup instead of regex
 local function isHex(char)
-    return char:match("[%da-fA-F]") ~= nil
+    return hexChars[char] ~= nil
 end
 
 -- Validate UUID structure manually (faster + stricter)
@@ -27,6 +46,7 @@ local function validateStructure(uuid)
         return false, "UUID length must be 36 characters"
     end
 
+    -- Dash positions in standard UUID format: 8-4-4-4-12
     local dashPositions = {
         [9] = true,
         [14] = true,
@@ -51,14 +71,22 @@ local function validateStructure(uuid)
     return true
 end
 
--- Extract UUID version
+-- Extract UUID version (more defensive)
 function UUID.getVersion(uuid)
+    if type(uuid) ~= "string" or #uuid < 15 then
+        return nil
+    end
     local versionChar = uuid:sub(15, 15)
-    return tonumber(versionChar, 16)
+    local version = tonumber(versionChar, 16)
+    return version
 end
 
--- Extract variant
+-- Extract variant (more defensive)
 function UUID.getVariant(uuid)
+    if type(uuid) ~= "string" or #uuid < 20 then
+        return "Unknown"
+    end
+    
     local variantChar = uuid:sub(20, 20):lower()
 
     if variantChar:match("[89ab]") then
@@ -77,7 +105,7 @@ function UUID.isNil(uuid)
     return uuid == UUID.NULL
 end
 
--- Main validation function
+-- Main validation function with comprehensive error handling
 function UUID.validate(uuid, options)
     options = options or {}
 
@@ -89,8 +117,8 @@ function UUID.validate(uuid, options)
     local version = UUID.getVersion(uuid)
 
     -- RFC 4122 versions are 1-5
-    if version < 1 or version > 5 then
-        return false, ("Invalid UUID version: %d"):format(version)
+    if not version or version < 1 or version > 5 then
+        return false, ("Invalid UUID version: %s"):format(version or "nil")
     end
 
     local variant = UUID.getVariant(uuid)
@@ -105,8 +133,7 @@ function UUID.validate(uuid, options)
     end
 
     if options.version and version ~= options.version then
-        return false, ("Expected UUID version %d, got %d")
-            :format(options.version, version)
+        return false, ("Expected UUID version %d, got %d"):format(options.version, version)
     end
 
     return true, {
@@ -121,19 +148,50 @@ function UUID.isValid(uuid)
     return UUID.validate(uuid)
 end
 
--- Pretty print info
+-- Pretty print info (improved with better formatting and return value)
 function UUID.inspect(uuid)
     local valid, info = UUID.validate(uuid)
 
     if not valid then
-        print("Invalid UUID:", info)
-        return
+        print("Invalid UUID: " .. info)
+        return false
     end
 
-    print("UUID:", uuid)
-    print("Version:", info.version)
-    print("Variant:", info.variant)
-    print("Nil UUID:", info.isNil)
+    print("UUID: " .. uuid)
+    print("Version: " .. info.version)
+    print("Variant: " .. info.variant)
+    print("Nil UUID: " .. tostring(info.isNil))
+    return true
+end
+
+-- Test suite for validation
+function UUID.runTests()
+    local tests = {
+        {uuid = "550e8400-e29b-41d4-a716-446655440000", valid = true, desc = "Valid UUID v4"},
+        {uuid = "00000000-0000-0000-0000-000000000000", valid = true, desc = "Nil UUID"},
+        {uuid = "invalid-uuid-format", valid = false, desc = "Invalid format"},
+        {uuid = "550e8400-e29b-61d4-a716-446655440000", valid = false, desc = "Wrong variant"},
+        {uuid = "550e8400-e29b-41d4-z716-446655440000", valid = false, desc = "Invalid hex char"},
+        {uuid = "550e8400-e29b-41d4-a71-446655440000", valid = false, desc = "Too short"},
+        {uuid = 12345, valid = false, desc = "Not a string"},
+    }
+    
+    local passed = 0
+    local failed = 0
+    
+    for _, test in ipairs(tests) do
+        local valid = UUID.isValid(test.uuid)
+        if valid == test.valid then
+            passed = passed + 1
+            print("✓ PASS: " .. test.desc)
+        else
+            failed = failed + 1
+            print("✗ FAIL: " .. test.desc .. " (expected " .. tostring(test.valid) .. ", got " .. tostring(valid) .. ")")
+        end
+    end
+    
+    print(("\nTests: %d passed, %d failed"):format(passed, failed))
+    return failed == 0
 end
 
 return UUID
